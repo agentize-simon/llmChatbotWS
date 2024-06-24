@@ -109,7 +109,9 @@ def route_question(question: str):
 class RoutedResponse(BaseModel):
     __root__: str
 
-chain = RunnablePassthrough()
-chain = chain | (lambda question: route_question(question['question']))
-chain = chain | StrOutputParser()
+chain = (
+    RunnablePassthrough()
+    | (lambda question: route_question(question['question']))
+    | StrOutputParser()
+)
 chain = chain.with_types(input_type=Question, output_type=RoutedResponse)
