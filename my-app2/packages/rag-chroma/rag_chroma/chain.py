@@ -5,8 +5,11 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough
+from langchain.memory import ConversationBufferMemory
 import requests
 import re
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnableLambda
 
 WEATHER_API_KEY = '9f1906902d12e374d9f1a20f48b24023'
 WEATHER_API_URL = 'https://api.openweathermap.org/data/2.5/weather'
@@ -34,6 +37,7 @@ def getWeather(city_name):
     response = requests.get(f"{WEATHER_API_URL}?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric")
     if response.status_code == 200:
         data = response.json()
+        print(data)
         return f"The current weather in {city_name} is {data['weather'][0]['description']} with a temperature of {data['main']['temp']}°C."
     else:
         return "Unable to fetch weather data."
@@ -57,61 +61,161 @@ def getPrice(symbol):
     else:
         return "Unable to fetch stock data."
 
-# RAG prompt
-template = """Answer the question based only on the following context:
-{context}
-
-Question: {question}
-"""
-prompt = ChatPromptTemplate.from_template(template)
-
-# LLM
 model = ChatOpenAI()
+# memory = ConversationBufferMemory()
 
-# RAG chain
-# chain = (
-#     RunnableParallel({"context": retriever, "question": RunnablePassthrough()})
-#     | prompt
-#     | model
-#     | StrOutputParser()
-# )
+# memory.chat_memory.add_user_message("hi!")
+# memory.chat_memory.add_ai_message("what's up?")
+# memory.load_memory_variables({})
 
-# Add typing for input
-class Question(BaseModel):
-    question: str
 
-def getCityName(question):
-    match = re.search(r'\b(?:in|at|for|of)\s+([A-Za-z\s]+)', question)
-    if match:
-        return match.group(1).strip()
-    return None
+route_chain = (
+    PromptTemplate.from_template(
+        """Given the user question below, classify it as either being about `Weather`, `Stock Price`, or `Other`.
 
-def getSymbol(question):
-    match = re.search(r'\b(?:symbol|stock)\s+([A-Z]+)', question)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r'\b[A-Z]{1,5}\b', question)
-    if match:
-        return match.group(0).strip()
-    return None
+Do not respond with more than one words.
 
-def route_question(question: str):
-    city = getCityName(question)
-    symbol = getSymbol(question)
-    
-    if "weather" in question.lower() and city:
-        return getWeather(city)
-    elif "stock" in question.lower() and symbol:
-        return getPrice(symbol)
-    else:
-        return "I can only answer questions about today's weather and stock prices."
+<question>
+{question}
+</question>
 
-class RoutedResponse(BaseModel):
-    __root__: str
-
-chain = (
-    RunnablePassthrough()
-    | (lambda question: route_question(question['question']))
+Classification:"""
+    )
+    | model
     | StrOutputParser()
 )
-chain = chain.with_types(input_type=Question, output_type=RoutedResponse)
+
+city_chain = (
+    PromptTemplate.from_template(
+        """Only return the city name in the question
+
+<question>
+{question}
+</question>
+"""
+    )
+    | model
+    | StrOutputParser()
+)
+
+symbol_chain = (
+    PromptTemplate.from_template(
+        """Only return the stock symbol in the question
+
+<question>
+{question}
+</question>
+"""
+    )
+    | model
+    | StrOutputParser()
+)
+weather_chain = (
+    city_chain
+    | RunnableLambda(lambda city: getWeather(city))
+)
+
+stock_chain = (
+    symbol_chain
+    | RunnableLambda(lambda symbol: getPrice(symbol))
+)
+# weather_chain = (PromptTemplate.from_template(
+#     """You are an expert in weather report. \
+# You will tell the user the detail of the weather today \
+# The city will be in the question\
+# Respond to the following question:
+
+# Question: {question}
+# Answer:"""
+# ) | model | StrOutputParser())
+
+# stock_chain = (PromptTemplate.from_template(
+#     """You are an expert in stock price report. \
+# You will tell the user the detail of the stock price today \
+# The stock symbol will be in the question\
+# Respond to the following question:
+
+# Question: {question}
+# Answer:"""
+# ) | model | StrOutputParser() )
+
+general_chain = (PromptTemplate.from_template(
+    """Respond the following sentense only 'Sorry, I can only answer question about weather or stock price' """
+) | model | StrOutputParser())
+
+def route(info):
+    print(info)
+    print(re.search(r'\b\w+\b', info["topic"]).group(0))
+    if "weather" in info["topic"].lower():
+        return weather_chain
+    elif "stock" in info["topic"].lower():
+        return stock_chain
+    else:
+        return general_chain
+    
+
+chain = {"topic": route_chain, "question": lambda x: x["question"]} | RunnableLambda(
+    route
+) 
+#getWeather("Toronto")
+chain.invoke({"question": "weather in toronto?"})
+chain.invoke({"question": "stock price of AAPL?"})
+
+# # RAG prompt
+# template = """Answer the question based only on the following context:
+# {context}
+
+# Question: {question}
+# """
+# prompt = ChatPromptTemplate.from_template(template)
+
+# # LLM
+# model = ChatOpenAI()
+
+# # RAG chain
+# # chain = (
+# #     RunnableParallel({"context": retriever, "question": RunnablePassthrough()})
+# #     | prompt
+# #     | model
+# #     | StrOutputParser()
+# # )
+
+# # Add typing for input
+# class Question(BaseModel):
+#     question: str
+
+# def getCityName(question):
+#     match = re.search(r'\b(?:in|at|for|of)\s+([A-Za-z\s]+)', question)
+#     if match:
+#         return match.group(1).strip()
+#     return None
+
+# def getSymbol(question):
+#     match = re.search(r'\b(?:symbol|stock)\s+([A-Z]+)', question)
+#     if match:
+#         return match.group(1).strip()
+#     match = re.search(r'\b[A-Z]{1,5}\b', question)
+#     if match:
+#         return match.group(0).strip()
+#     return None
+
+# def route_question(question: str):
+#     city = getCityName(question)
+#     symbol = getSymbol(question)
+    
+#     if "weather" in question.lower() and city:
+#         return getWeather(city)
+#     elif "stock" in question.lower() and symbol:
+#         return getPrice(symbol)
+#     else:
+#         return "I can only answer questions about today's weather and stock prices."
+
+# class RoutedResponse(BaseModel):
+#     __root__: str
+
+# chain = (
+#     RunnablePassthrough()
+#     | (lambda question: route_question(question['question']))
+#     | StrOutputParser()
+# )
+# chain = chain.with_types(input_type=Question, output_type=RoutedResponse)
