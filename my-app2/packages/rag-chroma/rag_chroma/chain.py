@@ -154,9 +154,16 @@ def route(info):
         return general_chain
     
 
-chain = {"topic": route_chain, "question": lambda x: x["question"]} | RunnableLambda(
+
+chain = {"topic": route_chain, "question": RunnablePassthrough()} | RunnableLambda(
     route
-) 
+)
+# Add typing for input
+class Question(BaseModel):
+    __root__: str
+
+
+
 #getWeather("Toronto")
 chain.invoke({"question": "weather in toronto?"})
 chain.invoke({"question": "stock price of AAPL?"})
