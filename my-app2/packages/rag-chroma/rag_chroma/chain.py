@@ -10,10 +10,15 @@ import requests
 import re
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableLambda
+from requests import Request, Session
+from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
+import json
+
 
 WEATHER_API_KEY = '9f1906902d12e374d9f1a20f48b24023'
 WEATHER_API_URL = 'https://api.openweathermap.org/data/2.5/weather'
 GEOCODING_API_URL = 'http://api.openweathermap.org/geo/1.0/direct'
+
 
 STOCK_API_KEY = '9E0JQT0KQ2UGWVPT'
 STOCK_API_URL = 'https://www.alphavantage.co/query'
@@ -42,7 +47,41 @@ def getWeather(city_name):
     else:
         return "Unable to fetch weather data."
 
-def getPrice(symbol):
+
+
+
+def get_crypto_price(symbol):
+    print("symbol:" + symbol)
+    url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest'
+    params = {'symbol': symbol, 'convert': 'USD'}
+    headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': 'dae736a1-f4d4-4287-8c3e-c3d89ee1d77a'}
+
+    response = requests.get(url, params=params, headers=headers)
+    #print(response.status_code)
+    #print( response.json())
+    if response.status_code == 200:
+        data = response.json()
+        try:
+            crypto_data = data['data'][symbol]
+            quote = crypto_data['quote']['USD']
+            return (f"{crypto_data['name']} ({crypto_data['symbol']}) data:\n"
+                    f"Price: ${quote['price']:.2f}\n"
+                    f"Volume 24h: ${quote['volume_24h']:.2f}\n"
+                    f"Market Cap: ${quote['market_cap']:.2f}\n"
+                    f"Percent Change 1h: {quote['percent_change_1h']:.2f}%\n"
+                    f"Percent Change 24h: {quote['percent_change_24h']:.2f}%\n"
+                    f"Percent Change 7d: {quote['percent_change_7d']:.2f}%\n"
+                    f"Last Updated: {quote['last_updated']}")
+        except KeyError:
+            return "Unable to fetch cryptocurrency data."
+    else:
+        return "Unable to fetch data from CoinMarketCap API."
+
+# Example usage
+symbol = 'BTC'  # Replace with any cryptocurrency symbol
+print(get_crypto_price(symbol))
+
+def get_stock_price(symbol):
     response = requests.get(f"{STOCK_API_URL}?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={STOCK_API_KEY}")
     if response.status_code == 200:
         data = response.json()
@@ -71,7 +110,7 @@ model = ChatOpenAI()
 
 route_chain = (
     PromptTemplate.from_template(
-        """Given the user question below, classify it as either being about `Weather`, `Stock Price`, or `Other`.
+        """Given the user question below, classify it as either being about `Weather`, `Stock Price`, `Crypto Price`, or `Other`.
 
 Do not respond with more than one words.
 
@@ -97,8 +136,19 @@ city_chain = (
     | model
     | StrOutputParser()
 )
+crypto_symbol_chain = (
+    PromptTemplate.from_template(
+        """Only return the crypto symbol in the question
+<question>
+{question}
+</question>
+"""
+    )
+    | model
+    | StrOutputParser()
+)
 
-symbol_chain = (
+stock_symbol_chain = (
     PromptTemplate.from_template(
         """Only return the stock symbol in the question
 
@@ -116,8 +166,13 @@ weather_chain = (
 )
 
 stock_chain = (
-    symbol_chain
-    | RunnableLambda(lambda symbol: getPrice(symbol))
+    stock_symbol_chain
+    | RunnableLambda(lambda symbol: get_stock_price(symbol))
+)
+
+crypto_chain = (
+    crypto_symbol_chain
+    | RunnableLambda(lambda symbol: get_crypto_price(symbol))
 )
 # weather_chain = (PromptTemplate.from_template(
 #     """You are an expert in weather report. \
@@ -148,8 +203,11 @@ def route(info):
     print(re.search(r'\b\w+\b', info["topic"]).group(0))
     if "weather" in info["topic"].lower():
         return weather_chain
+    elif "crypto" in info["topic"].lower():
+        return crypto_chain
     elif "stock" in info["topic"].lower():
         return stock_chain
+
     else:
         return general_chain
     
@@ -165,8 +223,10 @@ class Question(BaseModel):
 
 
 #getWeather("Toronto")
-chain.invoke({"question": "weather in toronto?"})
-chain.invoke({"question": "stock price of AAPL?"})
+#chain.invoke({"question": "weather in toronto?"})
+#chain.invoke({"question": "stock price of AAPL?"})
+#chain.invoke({"question": "crypto price of BTC?"})
+
 
 # # RAG prompt
 # template = """Answer the question based only on the following context:

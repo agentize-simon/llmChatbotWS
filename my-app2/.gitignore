@@ -83,3 +83,4 @@ ipython_config.py
 # Pipfile.lock (new version
 /app/__pycache__
 *.pyc
+
